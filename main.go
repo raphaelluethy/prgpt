@@ -16,21 +16,21 @@ var anthropicAPIKey = os.Getenv("ANTHROPIC_API_KEY")
 const anthropicAPIURL = "https://api.anthropic.com/v1/messages"
 
 func main() {
-	// Get current branch name
 	currentBranch := getCommandOutput("git", "rev-parse", "--abbrev-ref", "HEAD")
 
 	// Get base branch (usually main or master)
 	baseBranch := strings.TrimPrefix(getCommandOutput("git", "rev-parse", "--abbrev-ref", "origin/HEAD"), "origin/")
 
-	// Get list of commits
 	commits := getCommandOutput("git", "log", fmt.Sprintf("%s..%s", baseBranch, currentBranch), "--pretty=format:%h - %s")
+
+	// Get detailed diff
+	detailedDiff := getCommandOutput("git", "diff", fmt.Sprintf("%s..%s", baseBranch, currentBranch))
 
 	// Get changes overview
 	changesOverview := getCommandOutput("git", "diff", "--stat", fmt.Sprintf("%s..%s", baseBranch, currentBranch))
 
 	// Prepare content for summarization
-	content := fmt.Sprintf("Commits:\n%s\n\nChanges Overview:\n%s", commits, changesOverview)
-
+	content := fmt.Sprintf("Detailed Changes:\n%s\n\nChanges Overview:\n%s", detailedDiff, changesOverview)
 	// Get summary from Anthropic API
 	summary := getAnthropicSummary(content)
 
