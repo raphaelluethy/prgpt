@@ -23,18 +23,14 @@ func main() {
 
 	commits := getCommandOutput("git", "log", fmt.Sprintf("%s..%s", baseBranch, currentBranch), "--pretty=format:%h - %s")
 
-	// Get detailed diff
 	detailedDiff := getCommandOutput("git", "diff", fmt.Sprintf("%s..%s", baseBranch, currentBranch))
 
-	// Get changes overview
 	changesOverview := getCommandOutput("git", "diff", "--stat", fmt.Sprintf("%s..%s", baseBranch, currentBranch))
 
-	// Prepare content for summarization
 	content := fmt.Sprintf("Detailed Changes:\n%s\n\nChanges Overview:\n%s", detailedDiff, changesOverview)
-	// Get summary from Anthropic API
 	summary := getAnthropicSummary(content)
 
-	// Generate PR summary
+	// why is go string with multiline so ugly...
 	prSummary := fmt.Sprintf(`# Pull Request Summary
 
 ## Branch: %s
