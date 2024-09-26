@@ -21,6 +21,10 @@ func main() {
 	// Get base branch (usually main or master)
 	baseBranch := strings.TrimPrefix(getCommandOutput("git", "rev-parse", "--abbrev-ref", "origin/HEAD"), "origin/")
 
+	if len(os.Args) > 1 {
+		baseBranch = os.Args[1]
+	}
+
 	commits := getCommandOutput("git", "log", fmt.Sprintf("%s..%s", baseBranch, currentBranch), "--pretty=format:%h - %s")
 
 	detailedDiff := getCommandOutput("git", "diff", fmt.Sprintf("%s..%s", baseBranch, currentBranch))
@@ -28,7 +32,13 @@ func main() {
 	changesOverview := getCommandOutput("git", "diff", "--stat", fmt.Sprintf("%s..%s", baseBranch, currentBranch))
 
 	content := fmt.Sprintf("Detailed Changes:\n%s\n\nChanges Overview:\n%s", detailedDiff, changesOverview)
-	summary := getAnthropicSummary(content)
+	var summary string
+	if len(commits) > 2 {
+		fmt.Println("Printing out content")
+		content = fmt.Sprintf("%s\n\nCommits:\n%s", content, commits)
+	} else {
+		summary = getAnthropicSummary(content)
+	}
 
 	// why is go string with multiline so ugly...
 	prSummary := fmt.Sprintf(`# Pull Request Summary
