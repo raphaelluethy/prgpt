@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"os/exec"
@@ -14,6 +16,30 @@ import (
 var anthropicAPIKey = os.Getenv("ANTHROPIC_API_KEY")
 
 const anthropicAPIURL = "https://api.anthropic.com/v1/messages"
+const ollamaAPIURL = "http://localhost:11434/api/embeddings"
+const ollamaCompletionURL = "http://localhost:11434/api/generate"
+
+type OllamaEmbeddingRequest struct {
+	Model   string                 `json:"model"`
+	Prompt  string                 `json:"prompt"`
+	Options map[string]interface{} `json:"options,omitempty"`
+}
+
+type OllamaEmbeddingResponse struct {
+	Embedding []float64 `json:"embedding"`
+}
+
+type OllamaCompletionRequest struct {
+	Model   string                 `json:"model"`
+	Prompt  string                 `json:"prompt"`
+	Stream  bool                   `json:"stream"`
+	Options map[string]interface{} `json:"options,omitempty"`
+}
+
+type OllamaCompletionResponse struct {
+	Response string `json:"response"`
+	Done     bool   `json:"done"`
+}
 
 func main() {
 	currentBranch := getCommandOutput("git", "rev-parse", "--abbrev-ref", "HEAD")
@@ -25,7 +51,7 @@ func main() {
 		baseBranch = os.Args[1]
 	}
 
-	commits := getCommandOutput("git", "log", fmt.Sprintf("%s..%s", baseBranch, currentBranch), "--pretty=format:%h - %s")
+	commits := getCommandOutput("git", "log", baseBranch+".."+currentBranch, "--pretty=format:%h - %s")
 
 	detailedDiff := getCommandOutput("git", "diff", fmt.Sprintf("%s..%s", baseBranch, currentBranch))
 
@@ -33,10 +59,7 @@ func main() {
 
 	content := fmt.Sprintf("Detailed Changes:\n%s\n\nChanges Overview:\n%s", detailedDiff, changesOverview)
 	var summary string
-	if len(commits) > 2 {
-		fmt.Println("Printing out content")
-		content = fmt.Sprintf("%s\n\nCommits:\n%s", content, commits)
-	} else {
+	if len(commits) > 0 {
 		summary = getAnthropicSummary(content)
 	}
 
@@ -51,7 +74,7 @@ func main() {
 ## Changes Overview:
 %s
 
-## Summary:
+# Summary:
 %s
 
 ## Detailed Description:
@@ -71,20 +94,120 @@ func getCommandOutput(name string, args ...string) string {
 	return strings.TrimSpace(string(output))
 }
 
+func getEmbeddings(text string) ([]float64, error) {
+	requestBody, err := json.Marshal(OllamaEmbeddingRequest{
+		Model:  "nomic-embed-text",
+		Prompt: text,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling request: %v", err)
+	}
+
+	resp, err := http.Post(ollamaAPIURL, "application/json", bytes.NewBuffer(requestBody))
+	if err != nil {
+		return nil, fmt.Errorf("error calling Ollama API: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result OllamaEmbeddingResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("error decoding response: %v", err)
+	}
+
+	return result.Embedding, nil
+}
+
+func processEmbeddings(embeddings []float64) string {
+	// Calculate magnitude
+	var magnitude float64
+	for _, v := range embeddings {
+		magnitude += v * v
+	}
+	magnitude = math.Sqrt(magnitude)
+
+	// Normalize embeddings
+	normalized := make([]float64, len(embeddings))
+	for i, v := range embeddings {
+		normalized[i] = v / magnitude
+	}
+
+	// Convert to base64 for compact representation
+	bytes, _ := json.Marshal(normalized)
+	return base64.StdEncoding.EncodeToString(bytes)
+}
+
+func compressLogs(content string) (string, error) {
+	prompt := fmt.Sprintf(`Compress and summarize the following git changes into a concise but informative format, 
+preserving the most important technical details:
+
+%s
+
+Compressed summary:`, content)
+
+	requestBody, err := json.Marshal(OllamaCompletionRequest{
+		Model:  "llama2:3.2",
+		Prompt: prompt,
+		Stream: false,
+	})
+	if err != nil {
+		return "", fmt.Errorf("error marshaling request: %v", err)
+	}
+
+	resp, err := http.Post(ollamaCompletionURL, "application/json", bytes.NewBuffer(requestBody))
+	if err != nil {
+		return "", fmt.Errorf("error calling Ollama API: %v", err)
+	}
+	defer resp.Body.Close()
+
+	var result OllamaCompletionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("error decoding response: %v", err)
+	}
+
+	return result.Response, nil
+}
+
 func getAnthropicSummary(content string) string {
-	prompt := fmt.Sprintf("Summarize the following Git commits and changes overview:\n\n%s\n\nProvide a concise summary of the changes:", content)
+	// First compress the logs
+	compressedContent, err := compressLogs(content)
+	if err != nil {
+		fmt.Printf("Error compressing logs: %v\n", err)
+		compressedContent = content // Fallback to original content
+	}
+
+	// Get embeddings for the compressed content
+	embeddings, err := getEmbeddings(compressedContent)
+	if err != nil {
+		fmt.Printf("Error getting embeddings: %v\n", err)
+		return "Unable to generate summary"
+	}
+
+	// Process embeddings
+	processedEmbeddings := processEmbeddings(embeddings)
+
+	prompt := fmt.Sprintf(`Here are the Git changes with their semantic embeddings:
+
+Embeddings: %s
+
+Compressed Changes:
+%s
+
+Original Content Summary:
+%s
+
+Based on these changes, provide a concise summary of the modifications:`, processedEmbeddings, compressedContent, content)
 
 	requestBody, _ := json.Marshal(map[string]interface{}{
-		"model":      "claude-3-5-sonnet-20240620",
-		"max_tokens": 8096,
+		"model": "claude-3-5-sonnet-latest",
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},
 		},
+		"max_tokens": 4096,
 	})
 
 	req, _ := http.NewRequest("POST", anthropicAPIURL, bytes.NewBuffer(requestBody))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", anthropicAPIKey)
+	req.Header.Set("x-api-key", anthropicAPIKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 
 	client := &http.Client{}
@@ -96,13 +219,23 @@ func getAnthropicSummary(content string) string {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
-	var result map[string]interface{}
-	json.Unmarshal(body, &result)
 
-	if content, ok := result["content"].([]interface{}); ok && len(content) > 0 {
-		if text, ok := content[0].(map[string]interface{})["text"].(string); ok {
-			return text
-		}
+	// Debug the API response
+	fmt.Printf("Anthropic API Response: %s\n", string(body))
+
+	var result struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+
+	if err := json.Unmarshal(body, &result); err != nil {
+		fmt.Printf("Error unmarshaling response: %v\n", err)
+		return "Unable to generate summary"
+	}
+
+	if len(result.Content) > 0 {
+		return result.Content[0].Text
 	}
 
 	return "Unable to generate summary"
