@@ -41,6 +41,7 @@ type OllamaCompletionResponse struct {
 	Done     bool   `json:"done"`
 }
 
+// main is the entry point of the program.
 func main() {
 	currentBranch := getCommandOutput("git", "rev-parse", "--abbrev-ref", "HEAD")
 
@@ -84,6 +85,7 @@ func main() {
 	fmt.Println(prSummary)
 }
 
+// getCommandOutput executes a command and returns its output as a string.
 func getCommandOutput(name string, args ...string) string {
 	cmd := exec.Command(name, args...)
 	output, err := cmd.Output()
@@ -94,6 +96,8 @@ func getCommandOutput(name string, args ...string) string {
 	return strings.TrimSpace(string(output))
 }
 
+// getEmbeddings sends a request to the Ollama API to generate embeddings for the given text.
+// It returns the embeddings as a slice of float64 values and an error if any occurs.
 func getEmbeddings(text string) ([]float64, error) {
 	requestBody, err := json.Marshal(OllamaEmbeddingRequest{
 		Model:  "nomic-embed-text",
@@ -117,6 +121,7 @@ func getEmbeddings(text string) ([]float64, error) {
 	return result.Embedding, nil
 }
 
+// processEmbeddings calculates the magnitude of the embeddings, normalizes them, and converts them to a base64 string.
 func processEmbeddings(embeddings []float64) string {
 	// Calculate magnitude
 	var magnitude float64
@@ -136,6 +141,8 @@ func processEmbeddings(embeddings []float64) string {
 	return base64.StdEncoding.EncodeToString(bytes)
 }
 
+// compressLogs sends a request to the Ollama API to compress and summarize the given content.
+// It returns the compressed summary as a string and an error if any occurs.
 func compressLogs(content string) (string, error) {
 	prompt := fmt.Sprintf(`Compress and summarize the following git changes into a concise but informative format, 
 preserving the most important technical details:
@@ -167,6 +174,9 @@ Compressed summary:`, content)
 	return result.Response, nil
 }
 
+// getAnthropicSummary generates a summary of the given content using the Anthropic API.
+// It first compresses the logs, then gets embeddings for the compressed content, processes the embeddings,
+// and finally generates a summary based on the processed embeddings and the original content.
 func getAnthropicSummary(content string) string {
 	// First compress the logs
 	compressedContent, err := compressLogs(content)
